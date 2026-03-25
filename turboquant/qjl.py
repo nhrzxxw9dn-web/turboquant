@@ -1,0 +1,159 @@
+"""
+Quantized Johnson-Lindenstrauss (QJL) — 1-bit residual correction.
+
+The second stage of Inner-Product TurboQuant. After the MSE quantizer
+introduces error (residual r = x - decode(encode(x))), QJL corrects it
+with just 1 bit per dimension.
+
+Key properties from the paper:
+- Unbiased: E[⟨y, QJL_decode(QJL_encode(x))⟩] = ⟨y, x⟩
+- Variance: Var ≤ (π/2d) · ‖y‖²
+- Zero memory overhead: S is generated from seed, sign bits are 1 bit each.
+"""
+
+import numpy as np
+
+
+def generate_jl_matrix(d: int, seed: int = 0) -> np.ndarray:
+    """
+    Generate the JL projection matrix S ∈ ℝ^(d×d) with i.i.d. N(0,1) entries.
+
+    Uses a deterministic seed so S can be regenerated from the seed alone
+    (no need to store the full matrix).
+
+    Memory: d×d × 4 bytes. At d=768 this is ~2.25 MB — fits easily.
+    For very large d, consider chunked generation.
+
+    Args:
+        d: Vector dimension.
+        seed: Random seed for reproducibility.
+
+    Returns:
+        S ∈ ℝ^(d×d), float32.
+    """
+    rng = np.random.default_rng(seed)
+    return rng.standard_normal((d, d)).astype(np.float32)
+
+
+def qjl_encode(
+    residuals: np.ndarray, jl_matrix: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    QJL encode: extract sign bits from JL projection of residuals.
+
+    Q_qjl(r) = sign(S · r)
+
+    Args:
+        residuals: Residual vectors, shape (n, d) or (d,).
+        jl_matrix: JL matrix S, shape (d, d).
+
+    Returns:
+        (sign_bits, norms) where:
+            sign_bits: Packed uint8 array. Shape (n, ceil(d/8)) or (ceil(d/8),).
+                Each bit represents sign(S_i · r) — 1 for positive, 0 for negative.
+            norms: ‖r‖₂ for each residual. Shape (n,) or scalar.
+    """
+    single = residuals.ndim == 1
+    if single:
+        residuals = residuals[np.newaxis, :]
+
+    # Norms of residuals
+    norms = np.linalg.norm(residuals, axis=1)
+
+    # Project: (n, d) @ (d, d).T = (n, d)
+    projected = residuals @ jl_matrix.T
+
+    # Extract signs: positive → 1 (True), negative/zero → 0 (False)
+    signs = projected > 0  # (n, d) boolean
+
+    # Pack bits into bytes
+    sign_bits = np.packbits(signs, axis=1)  # (n, ceil(d/8))
+
+    if single:
+        return sign_bits[0], norms[0]
+    return sign_bits, norms
+
+
+def qjl_decode(
+    sign_bits: np.ndarray,
+    norms: np.ndarray,
+    jl_matrix: np.ndarray,
+    d: int,
+) -> np.ndarray:
+    """
+    QJL decode: reconstruct approximate residuals from sign bits.
+
+    Q_qjl^(-1)(z) = ‖r‖₂ · (√(π/2) / d) · S^T · z
+
+    where z ∈ {+1, -1}^d are the unpacked sign bits.
+
+    Args:
+        sign_bits: Packed uint8 array from qjl_encode.
+        norms: Residual norms from qjl_encode.
+        jl_matrix: Same JL matrix S used for encoding.
+        d: Original vector dimension (for unpacking).
+
+    Returns:
+        Approximate residuals, shape (n, d) or (d,).
+    """
+    single = sign_bits.ndim == 1
+    if single:
+        sign_bits = sign_bits[np.newaxis, :]
+        norms = np.array([norms])
+
+    # Unpack bits: (n, ceil(d/8)) → (n, d_padded) → (n, d)
+    unpacked = np.unpackbits(sign_bits, axis=1)[:, :d].astype(np.float32)
+
+    # Convert {0, 1} → {-1, +1}
+    z = 2.0 * unpacked - 1.0
+
+    # Decode: (√(π/2) / d) · S^T · z
+    scale = np.sqrt(np.pi / 2.0) / d
+    decoded = scale * (z @ jl_matrix)  # (n, d) @ (d, d) = (n, d)
+
+    # Scale by residual norms
+    decoded *= norms[:, np.newaxis]
+
+    if single:
+        return decoded[0]
+    return decoded
+
+
+def qjl_inner_product(
+    query: np.ndarray,
+    sign_bits: np.ndarray,
+    norms: np.ndarray,
+    jl_matrix: np.ndarray,
+    d: int,
+) -> np.ndarray:
+    """
+    Compute approximate inner products using QJL without full decode.
+
+    ⟨y, r̃⟩ = ‖r‖₂ · (√(π/2) / d) · ⟨y, S^T · z⟩
+            = ‖r‖₂ · (√(π/2) / d) · z^T · (S · y)
+
+    This avoids materializing the full decoded residual.
+
+    Args:
+        query: Query vector, shape (d,).
+        sign_bits: Packed sign bits, shape (n, ceil(d/8)).
+        norms: Residual norms, shape (n,).
+        jl_matrix: JL matrix S, shape (d, d).
+        d: Vector dimension.
+
+    Returns:
+        Approximate inner products, shape (n,).
+    """
+    # Project query through S: S · y → (d,)
+    projected_query = jl_matrix @ query  # (d,)
+
+    # Unpack sign bits
+    unpacked = np.unpackbits(sign_bits, axis=1)[:, :d].astype(np.float32)
+    z = 2.0 * unpacked - 1.0  # (n, d)
+
+    # z^T · (S · y) for each vector
+    dots = z @ projected_query  # (n,)
+
+    # Scale
+    scale = np.sqrt(np.pi / 2.0) / d
+    return norms * scale * dots
