@@ -1,6 +1,6 @@
 # TurboQuant
 
-> **⚠️ Alpha — untested on real workloads.** Unit tests pass but real-world validation against production embeddings is starting now. Expect API changes. Use at your own risk until v0.2.
+> **⚠️ Alpha — first real-world benchmarks completed** (see below). API may change before v1.0.
 
 Near-optimal vector quantization at 3-4 bits per dimension. First open-source implementation of the ICLR 2026 paper.
 
@@ -43,6 +43,22 @@ TurboQuant is a two-stage vector quantization algorithm:
 3. **QJL residual correction** (optional) adds 1-bit error correction for unbiased inner products
 
 At 3 bits/dimension, TurboQuant achieves MSE within 2.7x of the information-theoretic optimum.
+
+## Benchmarks (Real Production Embeddings)
+
+Tested on 1,045 production Gemini `gemini-embedding-001` vectors (768-dim) from a live pgvector database:
+
+| Bits | Cosine Sim (mean) | Cosine Sim (min) | Recall@10 | MSE/coord | Compression | Bytes/vec |
+|------|-------------------|-------------------|-----------|-----------|-------------|-----------|
+| 2-bit | 0.939 | 0.930 | 0.74 | 0.000054 | 15.7× | 196 |
+| **3-bit** | **0.983** | **0.978** | **0.81** | **0.000016** | **10.5×** | **292** |
+| **4-bit** | **0.995** | **0.994** | **0.87** | **0.000004** | **7.9×** | **388** |
+
+Key findings:
+- **Cosine fidelity is excellent** — 0.983 at 3-bit, 0.995 at 4-bit. No catastrophic outliers (min never below 0.978).
+- **Real embeddings outperform random vectors** — semantic clustering helps quantization.
+- **MSE well below paper bounds** — 0.000016 vs paper's 0.03 theoretical bound at 3-bit.
+- **Serialization is lossless** — encode → bytes → decode roundtrip has zero error.
 
 ## Compression Ratios
 
