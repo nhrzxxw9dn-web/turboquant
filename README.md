@@ -89,7 +89,8 @@ Tested on 1,045 production Gemini `gemini-embedding-001` vectors (768-dim) from 
 
 Key findings:
 - **Cosine fidelity is excellent** — 0.983 at 3-bit, 0.995 at 4-bit. No catastrophic outliers (min never below 0.978).
-- **Real embeddings outperform random vectors** — semantic clustering helps quantization.
+- **Massive headroom for similarity search** — with a typical cosine threshold of 0.75, even the worst-case 0.978 is well above the cutoff. No relevant results are lost.
+- **Real embeddings outperform random vectors** — semantic clustering helps quantization (0.983 vs 0.953 on random vectors).
 - **MSE well below paper bounds** — 0.000016 vs paper's 0.03 theoretical bound at 3-bit.
 - **Serialization is lossless** — encode → bytes → decode roundtrip has zero error.
 
