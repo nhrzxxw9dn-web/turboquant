@@ -40,11 +40,12 @@ def _fwht_inplace(x: np.ndarray) -> None:
     d = x.shape[-1]
     h = 1
     while h < d:
-        for i in range(0, d, 2 * h):
-            a = x[..., i:i + h].copy()
-            b = x[..., i + h:i + 2 * h].copy()
-            x[..., i:i + h] = a + b
-            x[..., i + h:i + 2 * h] = a - b
+        # Reshape last axis to (d/(2h), 2, h) so pairs are axis=-2
+        view = x.reshape(x.shape[:-1] + (d // (2 * h), 2, h))
+        a = view[..., 0, :].copy()
+        b = view[..., 1, :].copy()
+        view[..., 0, :] = a + b
+        view[..., 1, :] = a - b
         h *= 2
     x /= math.sqrt(d)
 

@@ -9,59 +9,29 @@ Key properties from the paper:
 - Unbiased: E[⟨y, QJL_decode(QJL_encode(x))⟩] = ⟨y, x⟩
 - Variance: Var ≤ (π/2d) · ‖y‖²
 - Zero memory overhead: S is generated from seed, sign bits are 1 bit each.
-
-Performance optimization: sparse Rademacher JL matrix (±1 with probability
-1/(2√d), 0 otherwise) gives the same theoretical guarantees with O(d√d)
-nonzeros instead of O(d²), and faster matrix-vector products.
 """
 
 import numpy as np
 
 
-def generate_jl_matrix(d: int, seed: int = 0, sparse: bool = True) -> np.ndarray:
+def generate_jl_matrix(d: int, seed: int = 0) -> np.ndarray:
     """
-    Generate the JL projection matrix S ∈ ℝ^(d×d).
+    Generate the JL projection matrix S ∈ ℝ^(d×d) with i.i.d. N(0,1) entries.
 
-    Two modes:
-      - sparse=True (default): Sparse Rademacher. Each entry is independently
-        +√s with prob 1/(2s), -√s with prob 1/(2s), 0 with prob 1-1/s,
-        where s = √d. This gives O(d^1.5) nonzeros and faster multiply.
-        Theoretical JL guarantees are preserved (Achlioptas, 2003).
-      - sparse=False: Dense Gaussian N(0,1) entries (original implementation).
+    Uses a deterministic seed so S can be regenerated from the seed alone
+    (no need to store the full matrix).
 
-    Uses a deterministic seed so S can be regenerated from the seed alone.
+    Memory: d×d × 4 bytes. At d=768 this is ~2.25 MB — fits easily.
 
     Args:
         d: Vector dimension.
         seed: Random seed for reproducibility.
-        sparse: If True, use sparse Rademacher construction.
 
     Returns:
         S ∈ ℝ^(d×d), float32.
     """
     rng = np.random.default_rng(seed)
-
-    if not sparse or d < 64:
-        # Dense Gaussian — original implementation
-        return rng.standard_normal((d, d)).astype(np.float32)
-
-    # Sparse Rademacher: s = √d, P(±√s) = 1/(2s), P(0) = 1-1/s
-    s = max(2, int(np.sqrt(d)))
-    sqrt_s = np.sqrt(float(s))
-
-    # Generate random values to determine nonzero positions and signs
-    uniform = rng.random((d, d))
-    matrix = np.zeros((d, d), dtype=np.float32)
-
-    # Positive entries: uniform < 1/(2s)
-    pos_mask = uniform < (1.0 / (2 * s))
-    # Negative entries: 1/(2s) <= uniform < 1/s
-    neg_mask = (uniform >= (1.0 / (2 * s))) & (uniform < (1.0 / s))
-
-    matrix[pos_mask] = sqrt_s
-    matrix[neg_mask] = -sqrt_s
-
-    return matrix
+    return rng.standard_normal((d, d)).astype(np.float32)
 
 
 def qjl_encode(

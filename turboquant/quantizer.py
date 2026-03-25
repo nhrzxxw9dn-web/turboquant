@@ -49,7 +49,6 @@ class TurboQuantizer:
         mode: "mse" for MSE-optimal or "inner_product" for unbiased IP estimation.
         seed: Random seed for rotation matrix. Must be the same for encode/decode.
         qjl_seed: Random seed for QJL matrix (inner_product mode only).
-        sparse_jl: Use sparse Rademacher JL matrix (faster for d ≥ 64).
     """
 
     def __init__(
@@ -59,7 +58,6 @@ class TurboQuantizer:
         mode: str = "mse",
         seed: int = 42,
         qjl_seed: int = 7,
-        sparse_jl: bool = True,
     ):
         if bits < 1 or bits > 8:
             raise ValueError(f"bits must be 1-8, got {bits}")
@@ -73,7 +71,6 @@ class TurboQuantizer:
         self.mode = mode
         self.seed = seed
         self.qjl_seed = qjl_seed
-        self.sparse_jl = sparse_jl
 
         # Effective MSE bits (inner_product mode reserves 1 bit for QJL)
         self._mse_bits = bits - 1 if mode == "inner_product" else bits
@@ -99,9 +96,7 @@ class TurboQuantizer:
     @property
     def jl_matrix(self) -> np.ndarray:
         if self._jl_matrix is None:
-            self._jl_matrix = generate_jl_matrix(
-                self.dim, self.qjl_seed, sparse=self.sparse_jl,
-            )
+            self._jl_matrix = generate_jl_matrix(self.dim, self.qjl_seed)
         return self._jl_matrix
 
     def fit(self, vectors: np.ndarray, max_iter: int = 100) -> "TurboQuantizer":

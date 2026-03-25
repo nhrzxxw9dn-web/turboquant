@@ -110,35 +110,6 @@ class TestTurboQuantizerIP:
         assert np.all(sims >= -1.1)
         assert np.all(sims <= 1.1)
 
-    def test_sparse_jl(self):
-        """Sparse JL should produce valid results."""
-        d = 128
-        tq = TurboQuantizer(dim=d, bits=3, mode="inner_product", sparse_jl=True)
-        rng = np.random.default_rng(0)
-        vectors = rng.standard_normal((20, d)).astype(np.float32)
-        query = rng.standard_normal(d).astype(np.float32)
-
-        compressed = tq.encode(vectors)
-        approx_ips = tq.inner_product(query, compressed)
-        true_ips = vectors @ query
-
-        corr = np.corrcoef(true_ips, approx_ips)[0, 1]
-        assert corr > 0.7, f"Sparse JL IP correlation too low: {corr}"
-
-    def test_dense_jl(self):
-        """Dense JL should still work."""
-        d = 128
-        tq = TurboQuantizer(dim=d, bits=3, mode="inner_product", sparse_jl=False)
-        rng = np.random.default_rng(0)
-        vectors = rng.standard_normal((20, d)).astype(np.float32)
-        query = rng.standard_normal(d).astype(np.float32)
-
-        compressed = tq.encode(vectors)
-        approx_ips = tq.inner_product(query, compressed)
-        true_ips = vectors @ query
-
-        corr = np.corrcoef(true_ips, approx_ips)[0, 1]
-        assert corr > 0.7, f"Dense JL IP correlation too low: {corr}"
 
 
 class TestAdaptiveCodebook:

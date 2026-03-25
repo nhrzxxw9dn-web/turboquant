@@ -57,10 +57,6 @@ For power-of-2 dimensions (256, 512, 1024, 2048, ...), TurboQuant now uses a **r
 
 Non-power-of-2 dimensions (768, 384, etc.) automatically fall back to QR.
 
-### Sparse JL Matrix
-
-The QJL error-correction stage now uses a **sparse Rademacher** projection matrix by default. Each entry is independently ±√s with probability 1/(2s) and 0 otherwise (where s = √d). This gives the same JL guarantees (Achlioptas, 2003) with O(d√d) nonzeros instead of O(d²).
-
 ### Adaptive Codebooks
 
 Instead of assuming the theoretical Beta distribution, you can now **fit codebooks from your actual embeddings**:
