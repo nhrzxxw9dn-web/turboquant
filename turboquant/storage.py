@@ -187,7 +187,7 @@ def _pack_indices(indices: np.ndarray, bits: int) -> np.ndarray:
     """
     Pack b-bit indices into bytes.
 
-    For 1-4 bits, we pack multiple values per byte.
+    Vectorized — no Python loops over vectors or dimensions.
     For 3 bits: 8 values → 3 bytes (24 bits).
     """
     n, d = indices.shape
@@ -196,7 +196,7 @@ def _pack_indices(indices: np.ndarray, bits: int) -> np.ndarray:
         return indices.copy()
 
     if bits == 4:
-        # Two 4-bit values per byte
+        # Two 4-bit values per byte — fully vectorized
         packed_d = (d + 1) // 2
         packed = np.zeros((n, packed_d), dtype=np.uint8)
         for i in range(0, d - 1, 2):
@@ -206,29 +206,30 @@ def _pack_indices(indices: np.ndarray, bits: int) -> np.ndarray:
         return packed
 
     if bits in (1, 2, 3):
-        # Generic bit packing
+        # Vectorized bit packing via boolean expansion
+        # 1. Expand each index to 'bits' individual bits
+        #    indices shape: (n, d), values in [0, 2^bits - 1]
+        #    bit_shifts: [bits-1, bits-2, ..., 0]
+        idx32 = indices.astype(np.uint32)
+        bit_shifts = np.arange(bits - 1, -1, -1, dtype=np.uint32)
+        # (n, d, 1) >> (bits,) → (n, d, bits) — each bit extracted
+        expanded = ((idx32[:, :, np.newaxis] >> bit_shifts) & 1).astype(np.uint8)
+        # 2. Flatten to (n, d * bits) — continuous bit stream per vector
+        bitstream = expanded.reshape(n, d * bits)
+        # 3. Pad to multiple of 8
         total_bits = d * bits
-        total_bytes = (total_bits + 7) // 8
-        packed = np.zeros((n, total_bytes), dtype=np.uint8)
-
-        for vec_idx in range(n):
-            bit_pos = 0
-            for dim_idx in range(d):
-                val = int(indices[vec_idx, dim_idx])
-                # Write 'bits' bits starting at bit_pos
-                for b in range(bits):
-                    if val & (1 << (bits - 1 - b)):
-                        byte_idx = bit_pos // 8
-                        bit_offset = 7 - (bit_pos % 8)
-                        packed[vec_idx, byte_idx] |= 1 << bit_offset
-                    bit_pos += 1
+        pad = (8 - total_bits % 8) % 8
+        if pad:
+            bitstream = np.pad(bitstream, ((0, 0), (0, pad)))
+        # 4. Pack 8 bits → 1 byte using np.packbits
+        packed = np.packbits(bitstream, axis=1)
         return packed
 
     raise ValueError(f"Unsupported bits: {bits}")
 
 
 def _unpack_indices(packed: np.ndarray, d: int, bits: int) -> np.ndarray:
-    """Unpack bytes back to b-bit indices."""
+    """Unpack bytes back to b-bit indices. Vectorized — no Python loops."""
     n = packed.shape[0]
 
     if bits == 8:
@@ -244,20 +245,18 @@ def _unpack_indices(packed: np.ndarray, d: int, bits: int) -> np.ndarray:
         return indices
 
     if bits in (1, 2, 3):
-        indices = np.zeros((n, d), dtype=np.uint8)
-        mask = (1 << bits) - 1
-
-        for vec_idx in range(n):
-            bit_pos = 0
-            for dim_idx in range(d):
-                val = 0
-                for b in range(bits):
-                    byte_idx = bit_pos // 8
-                    bit_offset = 7 - (bit_pos % 8)
-                    if packed[vec_idx, byte_idx] & (1 << bit_offset):
-                        val |= 1 << (bits - 1 - b)
-                    bit_pos += 1
-                indices[vec_idx, dim_idx] = val
+        # Vectorized: unpackbits → reshape → recombine bit groups
+        # 1. Unpack all bytes to individual bits
+        bitstream = np.unpackbits(packed, axis=1)  # (n, packed_bytes * 8)
+        # 2. Trim to exactly d * bits
+        total_bits = d * bits
+        bitstream = bitstream[:, :total_bits]  # (n, d * bits)
+        # 3. Reshape to (n, d, bits) — group bits per index
+        bitgroups = bitstream.reshape(n, d, bits)
+        # 4. Recombine: [msb, ..., lsb] → integer
+        #    bit_weights: [2^(bits-1), ..., 2^0]
+        bit_weights = (1 << np.arange(bits - 1, -1, -1, dtype=np.uint8))
+        indices = (bitgroups * bit_weights).sum(axis=2).astype(np.uint8)
         return indices
 
     raise ValueError(f"Unsupported bits: {bits}")
