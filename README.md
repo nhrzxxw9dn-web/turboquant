@@ -126,4 +126,4 @@ by Amir Zandieh, Vahab Mirrokni et al. (Google Research, KAIST, NYU)
 
 ## License
 
-Apache 2.0
+MIT
