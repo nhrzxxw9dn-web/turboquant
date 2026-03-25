@@ -1,5 +1,7 @@
 # TurboQuant
 
+> **⚠️ Alpha — untested on real workloads.** Unit tests pass but real-world validation against production embeddings is starting now. Expect API changes. Use at your own risk until v0.2.
+
 Near-optimal vector quantization at 3-4 bits per dimension. First open-source implementation of the ICLR 2026 paper.
 
 ## Install
