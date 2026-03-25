@@ -129,20 +129,31 @@ def compress_pgvector_column(
             ids = [r[0] for r in rows]
             vectors = np.array([list(r[1]) for r in rows], dtype=np.float32)
 
-            # Compress
+            # Compress batch once, then extract per-row blobs
             compressed = tq.encode(vectors)
-            blob = compressed.to_bytes()
-
-            # For per-row storage, we'd need to split the blob.
-            # For now, store each vector individually.
+            update_data = []
             for i, row_id in enumerate(ids):
-                single = tq.encode(vectors[i:i+1])
-                single_blob = single.to_bytes()
-                cur.execute(
-                    f"UPDATE {table} SET {compressed_column} = %s WHERE {id_column} = %s",
-                    (single_blob, row_id),
+                single = CompressedVectors(
+                    n=1,
+                    d=compressed.d,
+                    bits=compressed.bits,
+                    mode=compressed.mode,
+                    rotation_seed=compressed.rotation_seed,
+                    norms=compressed.norms[i:i+1],
+                    indices=compressed.indices[i:i+1] if compressed.indices is not None else None,
+                    packed_indices=None,
+                    qjl_sign_bits=compressed.qjl_sign_bits[i:i+1] if compressed.qjl_sign_bits is not None else None,
+                    qjl_norms=compressed.qjl_norms[i:i+1] if compressed.qjl_norms is not None else None,
+                    qjl_seed=compressed.qjl_seed,
                 )
+                single_blob = single.to_bytes()
+                update_data.append((single_blob, row_id))
                 total_compressed_bytes += len(single_blob)
+
+            cur.executemany(
+                f"UPDATE {table} SET {compressed_column} = %s WHERE {id_column} = %s",
+                update_data,
+            )
 
             total += len(rows)
             total_original_bytes += vectors.nbytes

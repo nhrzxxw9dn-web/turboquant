@@ -199,10 +199,10 @@ def _pack_indices(indices: np.ndarray, bits: int) -> np.ndarray:
         # Two 4-bit values per byte — fully vectorized
         packed_d = (d + 1) // 2
         packed = np.zeros((n, packed_d), dtype=np.uint8)
-        for i in range(0, d - 1, 2):
-            packed[:, i // 2] = (indices[:, i] << 4) | indices[:, i + 1]
+        limit = (d // 2) * 2
+        packed[:, :limit // 2] = (indices[:, 0:limit:2] << 4) | indices[:, 1:limit:2]
         if d % 2:
-            packed[:, packed_d - 1] = indices[:, d - 1] << 4
+            packed[:, -1] = indices[:, -1] << 4
         return packed
 
     if bits in (1, 2, 3):
@@ -237,11 +237,11 @@ def _unpack_indices(packed: np.ndarray, d: int, bits: int) -> np.ndarray:
 
     if bits == 4:
         indices = np.zeros((n, d), dtype=np.uint8)
-        for i in range(0, d - 1, 2):
-            indices[:, i] = packed[:, i // 2] >> 4
-            indices[:, i + 1] = packed[:, i // 2] & 0x0F
+        limit = (d // 2) * 2
+        indices[:, 0:limit:2] = packed[:, :limit // 2] >> 4
+        indices[:, 1:limit:2] = packed[:, :limit // 2] & 0x0F
         if d % 2:
-            indices[:, d - 1] = packed[:, (d - 1) // 2] >> 4
+            indices[:, -1] = packed[:, -1] >> 4
         return indices
 
     if bits in (1, 2, 3):
