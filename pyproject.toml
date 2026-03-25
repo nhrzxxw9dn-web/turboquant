@@ -7,7 +7,7 @@ name = "turboquant"
 version = "0.2.0"
 description = "TurboQuant: Near-optimal vector quantization at 3-4 bits/dimension. First open-source implementation of the ICLR 2026 paper."
 readme = "README.md"
-license = "Apache-2.0"
+license = "MIT"
 requires-python = ">=3.10"
 authors = [
     { name = "Project Julian Contributors" },
@@ -17,7 +17,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
