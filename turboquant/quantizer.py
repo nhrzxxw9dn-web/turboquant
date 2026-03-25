@@ -6,12 +6,18 @@ Usage:
     compressed = tq.encode(vectors)       # (n, 768) → CompressedVectors
     decoded = tq.decode(compressed)       # CompressedVectors → (n, 768)
     sims = tq.cosine_similarity(query, compressed)
+
+Adaptive codebooks:
+    tq = TurboQuantizer(dim=768, bits=3)
+    tq.fit(training_vectors)              # Learn optimal codebook from data
+    compressed = tq.encode(new_vectors)   # Uses fitted codebook
 """
 
 import numpy as np
 
 from turboquant.codebook import (
     dequantize_coordinates,
+    fit_codebook,
     get_codebook,
     quantize_coordinates,
 )
@@ -39,12 +45,11 @@ class TurboQuantizer:
 
     Args:
         dim: Vector dimension. Must match the vectors you'll encode.
-        bits: Bits per coordinate (1-4). Default 3 gives MSE ≤ 0.03.
+        bits: Bits per coordinate (1-8). Default 3 gives MSE ≤ 0.03.
         mode: "mse" for MSE-optimal or "inner_product" for unbiased IP estimation.
-            MSE mode uses all bits for the scalar quantizer.
-            Inner-product mode uses (bits-1) for MSE + 1 bit for QJL residual.
         seed: Random seed for rotation matrix. Must be the same for encode/decode.
         qjl_seed: Random seed for QJL matrix (inner_product mode only).
+        sparse_jl: Use sparse Rademacher JL matrix (faster for d ≥ 64).
     """
 
     def __init__(
@@ -54,6 +59,7 @@ class TurboQuantizer:
         mode: str = "mse",
         seed: int = 42,
         qjl_seed: int = 7,
+        sparse_jl: bool = True,
     ):
         if bits < 1 or bits > 8:
             raise ValueError(f"bits must be 1-8, got {bits}")
@@ -67,17 +73,19 @@ class TurboQuantizer:
         self.mode = mode
         self.seed = seed
         self.qjl_seed = qjl_seed
+        self.sparse_jl = sparse_jl
 
         # Effective MSE bits (inner_product mode reserves 1 bit for QJL)
         self._mse_bits = bits - 1 if mode == "inner_product" else bits
 
-        # Lazy-init rotation and codebook
-        self._rotation: np.ndarray | None = None
+        # Lazy-init
+        self._rotation = None
         self._codebook: tuple[np.ndarray, np.ndarray] | None = None
         self._jl_matrix: np.ndarray | None = None
+        self._fitted = False
 
     @property
-    def rotation(self) -> np.ndarray:
+    def rotation(self):
         if self._rotation is None:
             self._rotation = generate_rotation_matrix(self.dim, self.seed)
         return self._rotation
@@ -91,8 +99,44 @@ class TurboQuantizer:
     @property
     def jl_matrix(self) -> np.ndarray:
         if self._jl_matrix is None:
-            self._jl_matrix = generate_jl_matrix(self.dim, self.qjl_seed)
+            self._jl_matrix = generate_jl_matrix(
+                self.dim, self.qjl_seed, sparse=self.sparse_jl,
+            )
         return self._jl_matrix
+
+    def fit(self, vectors: np.ndarray, max_iter: int = 100) -> "TurboQuantizer":
+        """
+        Fit an adaptive codebook from training data.
+
+        Learns optimal quantization centroids from the empirical distribution
+        of rotated coordinates, instead of using the theoretical Beta PDF.
+        This can reduce MSE by 10-30% for specific embedding models.
+
+        Args:
+            vectors: Training vectors, shape (n, dim). 1000+ vectors
+                recommended for stable codebook estimation.
+            max_iter: Maximum Lloyd iterations for codebook fitting.
+
+        Returns:
+            self (for chaining: tq.fit(data).encode(data))
+        """
+        if vectors.shape[-1] != self.dim:
+            raise ValueError(
+                f"Expected dim={self.dim}, got vectors with dim={vectors.shape[-1]}"
+            )
+
+        vectors = vectors.astype(np.float32)
+        normalized, _ = normalize(vectors)
+        rotated = rotate(normalized, self.rotation)
+
+        self._codebook = fit_codebook(rotated, self._mse_bits, max_iter=max_iter)
+        self._fitted = True
+        return self
+
+    @property
+    def is_fitted(self) -> bool:
+        """Whether an adaptive codebook has been fitted."""
+        return self._fitted
 
     def encode(self, vectors: np.ndarray) -> CompressedVectors:
         """
@@ -130,10 +174,8 @@ class TurboQuantizer:
         qjl_sign_bits = None
         qjl_norms = None
         if self.mode == "inner_product":
-            # Compute residual in rotated space
             reconstructed_rotated = dequantize_coordinates(indices, centroids)
             residuals = rotated - reconstructed_rotated
-            # Unrotate residuals back to original space for QJL
             residuals_original = unrotate(residuals, self.rotation)
             qjl_sign_bits, qjl_norms = qjl_encode(residuals_original, self.jl_matrix)
 
@@ -155,12 +197,6 @@ class TurboQuantizer:
     def decode(self, compressed: CompressedVectors) -> np.ndarray:
         """
         Reconstruct approximate vectors from compressed representation.
-
-        Args:
-            compressed: CompressedVectors from encode().
-
-        Returns:
-            Approximate vectors, shape (n, dim).
         """
         compressed.unpack()
 
@@ -195,18 +231,6 @@ class TurboQuantizer:
     ) -> np.ndarray:
         """
         Compute approximate inner products: ⟨query, x_i⟩ for all compressed vectors.
-
-        For inner_product mode, uses the unbiased two-stage estimator:
-            ⟨y, x̃_mse⟩ + ‖r‖₂ · ⟨y, QJL_decode(QJL_encode(r))⟩
-
-        For MSE mode, uses decoded vectors directly.
-
-        Args:
-            query: Query vector, shape (dim,).
-            compressed: CompressedVectors from encode().
-
-        Returns:
-            Inner products, shape (n,).
         """
         if query.shape[-1] != self.dim:
             raise ValueError(
@@ -216,19 +240,18 @@ class TurboQuantizer:
         compressed.unpack()
         centroids, _ = self.codebook
 
-        # MSE component: ⟨query, decode_mse(x)⟩
+        # MSE component
         reconstructed_rotated = dequantize_coordinates(compressed.indices, centroids)
         decoded_mse = unrotate(reconstructed_rotated, self.rotation)
         decoded_mse *= compressed.norms[:, np.newaxis]
 
-        mse_dots = decoded_mse @ query  # (n,)
+        mse_dots = decoded_mse @ query
 
         # QJL component (inner_product mode only)
         if (
             compressed.mode == "inner_product"
             and compressed.qjl_sign_bits is not None
         ):
-            # Scale query norms by original vector norms for QJL
             qjl_dots = qjl_inner_product(
                 query,
                 compressed.qjl_sign_bits,
@@ -245,43 +268,20 @@ class TurboQuantizer:
     ) -> np.ndarray:
         """
         Compute approximate cosine similarities.
-
-        cosine(q, x) = ⟨q, x⟩ / (‖q‖ · ‖x‖)
-
-        Args:
-            query: Query vector, shape (dim,).
-            compressed: CompressedVectors from encode().
-
-        Returns:
-            Cosine similarities, shape (n,). Values in [-1, 1].
         """
         query = query.astype(np.float32)
         query_norm = np.linalg.norm(query)
         if query_norm < 1e-10:
             return np.zeros(compressed.n, dtype=np.float32)
 
-        # Normalize query for inner product computation
         dots = self.inner_product(query / query_norm, compressed)
 
-        # Divide by stored norms (already factored into inner_product,
-        # but we divided query by its norm, so result is cosine)
-        # Actually: IP(q/‖q‖, x) = ⟨q/‖q‖, x⟩ = ‖x‖ · cos(q, x)
-        # So: cos(q, x) = IP(q/‖q‖, x) / ‖x‖
         norms = np.maximum(compressed.norms, 1e-10)
         return dots / norms
 
     def mse(self, original: np.ndarray, compressed: CompressedVectors) -> float:
         """
         Compute mean squared error between original and decoded vectors.
-
-        Useful for verifying compression quality matches paper bounds.
-
-        Args:
-            original: Original vectors, shape (n, dim).
-            compressed: CompressedVectors from encode().
-
-        Returns:
-            Mean squared error (per coordinate).
         """
         decoded = self.decode(compressed)
         diff = original - decoded

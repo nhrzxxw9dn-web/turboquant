@@ -12,10 +12,15 @@ Usage:
     compressed = tq.encode(vectors)       # (n, 768) float32 → CompressedVectors
     decoded = tq.decode(compressed)       # CompressedVectors → (n, 768) float32
     sims = tq.cosine_similarity(query, compressed)  # approximate cosine sim
+
+Adaptive codebooks:
+    tq = TurboQuantizer(dim=768, bits=3)
+    tq.fit(training_vectors)              # Learn codebook from your embeddings
+    compressed = tq.encode(new_vectors)   # Uses model-specific codebook
 """
 
 from turboquant.quantizer import TurboQuantizer
 from turboquant.storage import CompressedVectors
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = ["TurboQuantizer", "CompressedVectors"]

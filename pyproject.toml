@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "turboquant"
-version = "0.1.0"
+version = "0.2.0"
 description = "TurboQuant: Near-optimal vector quantization at 3-4 bits/dimension. First open-source implementation of the ICLR 2026 paper."
 readme = "README.md"
 license = "Apache-2.0"
@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 authors = [
     { name = "Project Julian Contributors" },
 ]
-keywords = ["vector-quantization", "embeddings", "compression", "pgvector", "turboquant", "polarquant", "qjl"]
+keywords = ["vector-quantization", "embeddings", "compression", "pgvector", "turboquant", "polarquant", "qjl", "hadamard"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
