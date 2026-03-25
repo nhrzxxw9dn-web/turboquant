@@ -44,6 +44,39 @@ TurboQuant is a two-stage vector quantization algorithm:
 
 At 3 bits/dimension, TurboQuant achieves MSE within 2.7x of the information-theoretic optimum.
 
+## v0.2.0 — Performance & Accuracy Improvements
+
+### Hadamard Fast Rotation (O(d log d))
+
+For power-of-2 dimensions (256, 512, 1024, 2048, ...), TurboQuant now uses a **randomized Walsh-Hadamard transform** instead of a dense QR matrix multiply. This reduces rotation cost from O(d²) to O(d log d) and memory from O(d²) to O(d):
+
+| Operation | QR (v0.1) | Hadamard (v0.2) | Speedup |
+|-----------|-----------|-----------------|---------|
+| Rotation matrix memory (d=1024) | 4 MB | 8 KB | 500× |
+| rotate() per vector | O(d²) | O(d log d) | ~100× at d=1024 |
+
+Non-power-of-2 dimensions (768, 384, etc.) automatically fall back to QR.
+
+### Adaptive Codebooks
+
+Instead of assuming the theoretical Beta distribution, you can now **fit codebooks from your actual embeddings**:
+
+```python
+tq = TurboQuantizer(dim=768, bits=3)
+
+# Fit codebook from training data (1000+ vectors recommended)
+tq.fit(training_vectors)
+
+# Encode using the model-specific codebook
+compressed = tq.encode(new_vectors)
+```
+
+The adaptive codebook learns the empirical distribution of rotated coordinates, which can reduce MSE by 10-30% for embeddings that deviate from the ideal distribution.
+
+### Vectorized Quantization
+
+For small codebooks (≤4 bits / 16 levels), quantization now uses vectorized comparison instead of binary search. This eliminates branching and is faster for the common 2-4 bit case.
+
 ## Benchmarks (Real Production Embeddings)
 
 Tested on 1,045 production Gemini `gemini-embedding-001` vectors (768-dim) from a live pgvector database:

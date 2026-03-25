@@ -22,7 +22,6 @@ def generate_jl_matrix(d: int, seed: int = 0) -> np.ndarray:
     (no need to store the full matrix).
 
     Memory: d×d × 4 bytes. At d=768 this is ~2.25 MB — fits easily.
-    For very large d, consider chunked generation.
 
     Args:
         d: Vector dimension.
@@ -50,24 +49,22 @@ def qjl_encode(
     Returns:
         (sign_bits, norms) where:
             sign_bits: Packed uint8 array. Shape (n, ceil(d/8)) or (ceil(d/8),).
-                Each bit represents sign(S_i · r) — 1 for positive, 0 for negative.
             norms: ‖r‖₂ for each residual. Shape (n,) or scalar.
     """
     single = residuals.ndim == 1
     if single:
         residuals = residuals[np.newaxis, :]
 
-    # Norms of residuals
     norms = np.linalg.norm(residuals, axis=1)
 
     # Project: (n, d) @ (d, d).T = (n, d)
     projected = residuals @ jl_matrix.T
 
     # Extract signs: positive → 1 (True), negative/zero → 0 (False)
-    signs = projected > 0  # (n, d) boolean
+    signs = projected > 0
 
     # Pack bits into bytes
-    sign_bits = np.packbits(signs, axis=1)  # (n, ceil(d/8))
+    sign_bits = np.packbits(signs, axis=1)
 
     if single:
         return sign_bits[0], norms[0]
@@ -86,22 +83,12 @@ def qjl_decode(
     Q_qjl^(-1)(z) = ‖r‖₂ · (√(π/2) / d) · S^T · z
 
     where z ∈ {+1, -1}^d are the unpacked sign bits.
-
-    Args:
-        sign_bits: Packed uint8 array from qjl_encode.
-        norms: Residual norms from qjl_encode.
-        jl_matrix: Same JL matrix S used for encoding.
-        d: Original vector dimension (for unpacking).
-
-    Returns:
-        Approximate residuals, shape (n, d) or (d,).
     """
     single = sign_bits.ndim == 1
     if single:
         sign_bits = sign_bits[np.newaxis, :]
         norms = np.array([norms])
 
-    # Unpack bits: (n, ceil(d/8)) → (n, d_padded) → (n, d)
     unpacked = np.unpackbits(sign_bits, axis=1)[:, :d].astype(np.float32)
 
     # Convert {0, 1} → {-1, +1}
@@ -109,9 +96,8 @@ def qjl_decode(
 
     # Decode: (√(π/2) / d) · S^T · z
     scale = np.sqrt(np.pi / 2.0) / d
-    decoded = scale * (z @ jl_matrix)  # (n, d) @ (d, d) = (n, d)
+    decoded = scale * (z @ jl_matrix)
 
-    # Scale by residual norms
     decoded *= norms[:, np.newaxis]
 
     if single:
@@ -129,8 +115,7 @@ def qjl_inner_product(
     """
     Compute approximate inner products using QJL without full decode.
 
-    ⟨y, r̃⟩ = ‖r‖₂ · (√(π/2) / d) · ⟨y, S^T · z⟩
-            = ‖r‖₂ · (√(π/2) / d) · z^T · (S · y)
+    ⟨y, r̃⟩ = ‖r‖₂ · (√(π/2) / d) · z^T · (S · y)
 
     This avoids materializing the full decoded residual.
 
@@ -145,15 +130,14 @@ def qjl_inner_product(
         Approximate inner products, shape (n,).
     """
     # Project query through S: S · y → (d,)
-    projected_query = jl_matrix @ query  # (d,)
+    projected_query = jl_matrix @ query
 
     # Unpack sign bits
     unpacked = np.unpackbits(sign_bits, axis=1)[:, :d].astype(np.float32)
-    z = 2.0 * unpacked - 1.0  # (n, d)
+    z = 2.0 * unpacked - 1.0
 
     # z^T · (S · y) for each vector
-    dots = z @ projected_query  # (n,)
+    dots = z @ projected_query
 
-    # Scale
     scale = np.sqrt(np.pi / 2.0) / d
     return norms * scale * dots
